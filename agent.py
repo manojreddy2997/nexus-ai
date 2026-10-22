@@ -1,7 +1,10 @@
 
 import json
 import re
+
 import ollama
+
+from tool_executor import execute_tool
 
 
 # --------------------------------------------------
@@ -15,87 +18,7 @@ client = ollama.Client()
 
 
 # --------------------------------------------------
-# 2. TOOL 1: LOOK UP AN ORDER
-# --------------------------------------------------
-
-def get_order(order_id: str) -> dict:
-    """
-    Look up an order in our sample database.
-    """
-
-    orders = {
-        "ORD1002": {
-            "order_id": "ORD1002",
-            "item": "Mechanical Keyboard",
-            "status": "Delayed",
-        },
-        "ORD1003": {
-            "order_id": "ORD1003",
-            "item": "Wireless Mouse",
-            "status": "Delivered",
-        },
-    }
-
-    normalized_id = order_id.strip().upper()
-    normalized_id = re.sub(r"[\s-]+", "", normalized_id)
-
-    if normalized_id in orders:
-        return orders[normalized_id]
-
-    return {
-        "error": "Order not found",
-        "order_id": normalized_id,
-    }
-
-
-# --------------------------------------------------
-# 3. TOOL 2: CHECK REFUND POLICY
-# --------------------------------------------------
-
-def check_refund_policy(order_status: str) -> dict:
-    """
-    Return sample policy guidance based on order status.
-
-    This tool does not approve or process refunds.
-    """
-
-    status = order_status.strip().lower()
-
-    if status == "delivered":
-        return {
-            "policy": (
-                "Delivered orders may qualify for a refund review."
-            ),
-            "next_step": (
-                "Check the return window and applicable conditions."
-            ),
-            "automatic_refund": False,
-        }
-
-    if status == "delayed":
-        return {
-            "policy": (
-                "Delayed orders require a support review."
-            ),
-            "next_step": (
-                "Review the delivery delay and applicable policy."
-            ),
-            "automatic_refund": False,
-        }
-
-    return {
-        "policy": (
-            "Eligibility cannot be determined from this status alone."
-        ),
-        "next_step": (
-            "Ask support to review the order."
-        ),
-        "automatic_refund": False,
-    }
-
-
-# --------------------------------------------------
-# 4. DEFINE TOOLS FOR THE LLM
+# 2. DEFINE APPROVED TOOLS FOR OLLAMA
 # --------------------------------------------------
 
 tools = [
@@ -104,7 +27,8 @@ tools = [
         "function": {
             "name": "get_order",
             "description": (
-                "Look up an order using its ID, such as ORD1002."
+                "Look up an order using its ID, "
+                "such as ORD1002."
             ),
             "parameters": {
                 "type": "object",
@@ -123,8 +47,8 @@ tools = [
         "function": {
             "name": "check_refund_policy",
             "description": (
-                "Check sample refund guidance using the actual "
-                "order status returned by get_order."
+                "Check sample refund guidance using the "
+                "actual order status returned by get_order."
             ),
             "parameters": {
                 "type": "object",
@@ -141,22 +65,12 @@ tools = [
 ]
 
 
-# Connect each advertised tool to its real Python function.
-available_functions = {
-    "get_order": get_order,
-    "check_refund_policy": check_refund_policy,
-}
-
-
 # --------------------------------------------------
-# 5. EXTRACT A VALID ORDER ID
+# 3. EXTRACT AN ORDER ID
 # --------------------------------------------------
 
 def extract_order_id(user_input: str):
-    """
-    Find IDs like ORD1002, ord1002, or ORD-1002.
-    Avoid matching the ordinary word 'order'.
-    """
+    """Extract IDs such as ORD1002 or ORD-1002."""
 
     match = re.search(
         r"\bORD[\s-]*\d+\b",
@@ -167,118 +81,123 @@ def extract_order_id(user_input: str):
     if not match:
         return None
 
-    order_id = re.sub(
+    return re.sub(
         r"[\s-]+",
         "",
         match.group(0).upper(),
     )
 
-    return order_id
-
 
 # --------------------------------------------------
-# 6. REFUND WORKFLOW
+# 4. CONTROLLED REFUND WORKFLOW
 # --------------------------------------------------
 
 def handle_refund_request(user_input: str, order_id: str):
     """
-    Explicitly run the order lookup first, then the policy check.
-    This prevents the LLM from skipping the policy tool.
-    Do not claim that support will contact the customer
-    unless a contact tool actually performs that action.
+    Look up the order and provide sample refund guidance.
+    This workflow never approves or processes a refund.
     """
 
     print("\n--- Tool round 1: Order lookup ---")
 
-    order_result = get_order(order_id)
+    order_result = execute_tool(
+        "get_order",
+        {"order_id": order_id},
+    )
 
     print("Requested tool: get_order")
-    print("Arguments:", {"order_id": order_id})
-    print("DEBUG: Extracted order ID =", repr(order_id))
     print("Tool result:", json.dumps(order_result, indent=2))
 
-    # Stop if the order does not exist.
-    if "error" in order_result:
-        print("\nAgent: I couldn't find that order.")
-        print("Please check the order ID and try again.")
+    if not order_result.get("success"):
+        print("\nAgent: I couldn't retrieve that order.")
+        print(
+            order_result.get(
+                "error",
+                "Please check the order ID and try again.",
+            )
+        )
         return
+
+    order_data = order_result["data"]
+    actual_status = order_data["status"]
 
     print("\n--- Tool round 2: Refund policy ---")
 
-    actual_status = order_result["status"]
-
-    policy_result = check_refund_policy(actual_status)
+    policy_result = execute_tool(
+        "check_refund_policy",
+        {"order_status": actual_status},
+    )
 
     print("Requested tool: check_refund_policy")
-    print("Arguments:", {"order_status": actual_status})
     print("Tool result:", json.dumps(policy_result, indent=2))
 
-    # Give the LLM verified tool results to summarize.
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "You are a careful customer-support assistant. "
-                "Answer using only the supplied order and policy "
-                "results. Explain the order status, policy guidance, "
-                "and next step. Do not invent facts. Do not claim "
-                "a refund is approved or processed. The supplied "
-                "policy is sample guidance, not a real retailer's "
-                "official policy. Keep your answer concise."
-            ),
-        },
-        {
-            "role": "user",
-            "content": (
-                f"Customer request: {user_input}\n\n"
-                f"Verified order result:\n"
-                f"{json.dumps(order_result, indent=2)}\n\n"
-                f"Policy tool result:\n"
-                f"{json.dumps(policy_result, indent=2)}\n\n"
-                "Explain the result to the customer."
-            ),
-        },
-    ]
-
-    print("\n--- Generating final response ---")
-
-    try:
-        response = client.chat(
-            model=MODEL,
-            messages=messages,
+    if not policy_result.get("success"):
+        print(
+            "\nAgent: I retrieved the order, but "
+            "could not complete the policy check."
         )
+        return
 
-        print("\nAgent:", response.message.content)
+    # Format the response directly from verified tool results.
+    # Do not ask the LLM to generate refund guidance.
 
-    except Exception as error:
-        print("\nAgent: The order and policy checks completed.")
-        print("Order status:", actual_status)
-        print("Policy:", policy_result["policy"])
-        print("Next step:", policy_result["next_step"])
-        print("LLM error:", error)
+    order_id_result = order_data.get("order_id", order_id)
+    item = order_data.get("item", "Unknown item")
+    status = order_data.get("status", "Unknown")
+
+    policy = policy_result.get(
+        "policy",
+        "Refund eligibility requires further review.",
+    )
+
+    next_step = policy_result.get(
+        "next_step",
+        "Contact support for further guidance.",
+    )
+
+    print("\n--- Final response ---")
+
+    print(
+        f"\nAgent: Order {order_id_result} "
+        f"({item}) is currently {status}.\n\n"
+        f"Sample refund guidance: {policy}\n\n"
+        f"Suggested next step: {next_step}\n\n"
+        "This is sample guidance, not an official "
+        "retailer policy. No refund has been approved "
+        "or processed."
+    )
 
 
 # --------------------------------------------------
-# 7. GENERAL TOOL-CALLING AGENT
+# 5. GENERAL TOOL-CALLING AGENT
 # --------------------------------------------------
 
 def run_general_agent(user_input: str):
     """
-    Let the LLM request tools, execute them in Python,
-    observe their results, and continue until it finishes.
+    Let Ollama request approved tools.
+
+    Python validates and executes every tool request.
+    The verified results are returned to Ollama.
     """
 
     messages = [
         {
             "role": "system",
-            "content": (
-                "You are a customer-support AI agent. "
-                "Use tools when you need order information. "
-                "Never invent order details. If a tool returns "
-                "an error, explain it clearly. You may request "
-                "multiple tools when needed. Never claim a refund "
-                "was approved or processed. Sample refund guidance "
-                "is not an official retailer policy."
+                        "content": (
+                "You are Nexus AI, a careful customer-support assistant. "
+                "Use approved tools when you need order information. "
+                "Treat tool results as the only source of facts about "
+                "orders. Never invent or assume an item's production "
+                "status, shipping details, estimated delivery date, "
+                "tracking activity, or customer contact. "
+                "If a tool returns an error, explain that error clearly. "
+                "If the tool provides only an order status, report only "
+                "that status and the item or order ID when available. "
+                "Do not describe a delayed order as being in production "
+                "unless a tool explicitly confirms it. "
+                "Never claim a refund was approved or processed. "
+                "Refund guidance is sample guidance, not an official "
+                "retailer policy. Keep answers concise and factual."
             ),
         },
         {
@@ -294,21 +213,24 @@ def run_general_agent(user_input: str):
                 messages=messages,
                 tools=tools,
             )
-
-        except Exception as error:
-            print("\nAgent error:", error)
+        except Exception:
+            print(
+                "\nAgent: I couldn't communicate with the "
+                "local language model. Check that Ollama "
+                "is running and the model is available."
+            )
             return
 
         tool_calls = response.message.tool_calls
 
-        # If the LLM does not request another tool, finish.
+        # No tool calls means the model has finished.
         if not tool_calls:
             print("\nAgent:", response.message.content)
             return
 
         print(f"\n--- Tool round {round_number} ---")
 
-        # Preserve the assistant's tool-call message in history.
+        # Preserve the assistant's tool-call message.
         messages.append(response.message)
 
         for tool_call in tool_calls:
@@ -318,26 +240,30 @@ def run_general_agent(user_input: str):
             print("Requested tool:", tool_name)
             print("Arguments:", arguments)
 
-            function_to_call = available_functions.get(tool_name)
-
-            if function_to_call is None:
-                tool_result = {
-                    "error": f"Unknown tool: {tool_name}"
-                }
-            else:
-                try:
-                    tool_result = function_to_call(**arguments)
-                except Exception as error:
+            # All tool requests must pass through the executor.
+            try:
+                if not isinstance(arguments, dict):
                     tool_result = {
-                        "error": str(error)
+                        "success": False,
+                        "error": "Invalid tool arguments",
                     }
+                else:
+                    tool_result = execute_tool(
+                        tool_name,
+                        arguments,
+                    )
+            except Exception:
+                tool_result = {
+                    "success": False,
+                    "error": "Tool execution failed",
+                }
 
             print(
                 "Tool result:",
                 json.dumps(tool_result, indent=2),
             )
 
-            # Send the result back to the LLM.
+            # Send the result back so the model can continue.
             messages.append(
                 {
                     "role": "tool",
@@ -346,23 +272,25 @@ def run_general_agent(user_input: str):
             )
 
     print(
-        "\nAgent: I reached the maximum number of tool rounds. "
-        "Please try a simpler request."
+        "\nAgent: I reached the maximum number of tool "
+        "rounds. Please try a simpler request."
     )
 
 
 # --------------------------------------------------
-# 8. MAIN AGENT ENTRY POINT
+# 6. MAIN AGENT ENTRY POINT
 # --------------------------------------------------
 
 def run_agent(user_input: str):
+    """Route user input to the appropriate workflow."""
+
     user_input = user_input.strip()
 
     if not user_input:
         print("Agent: Please enter a message.")
         return
 
-    # Refund requests follow a controlled, reliable sequence.
+    # Refund requests use a controlled, predictable sequence.
     if "refund" in user_input.lower():
         order_id = extract_order_id(user_input)
 
@@ -376,12 +304,11 @@ def run_agent(user_input: str):
         handle_refund_request(user_input, order_id)
         return
 
-    # Other requests use the general LLM tool-calling loop.
-    run_general_agent(user_input)
+        run_general_agent(user_input)
 
 
 # --------------------------------------------------
-# 9. RUN THE PROGRAM
+# 7. RUN THE PROGRAM
 # --------------------------------------------------
 
 if __name__ == "__main__":
