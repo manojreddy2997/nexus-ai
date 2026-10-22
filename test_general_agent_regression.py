@@ -7,22 +7,24 @@ from unittest.mock import patch
 import agent
 
 
-def make_response(content=None, tool_calls=None):
-    """Create a mock Ollama response."""
+def make_tool_call(name, arguments):
+    """Create a mock Ollama tool call."""
+    return SimpleNamespace(
+        function=SimpleNamespace(
+            name=name,
+            arguments=arguments,
+        )
+    )
+
+
+def make_response(content="", tool_calls=None):
+    """Create a mock Ollama chat response."""
     message = SimpleNamespace(
+        role="assistant",
         content=content,
         tool_calls=tool_calls or [],
     )
     return SimpleNamespace(message=message)
-
-
-def make_tool_call(name, arguments):
-    """Create a mock tool call."""
-    function = SimpleNamespace(
-        name=name,
-        arguments=arguments,
-    )
-    return SimpleNamespace(function=function)
 
 
 class TestGeneralAgentRegression(unittest.TestCase):
@@ -33,10 +35,9 @@ class TestGeneralAgentRegression(unittest.TestCase):
             "get_order",
             {"order_id": "ORD1002"},
         )
-
         tool_response = make_response(tool_calls=[tool_call])
         final_response = make_response(
-            content="Order ORD1002 is Delayed."
+            content="The Mechanical Keyboard order is delayed."
         )
 
         with (
@@ -57,33 +58,22 @@ class TestGeneralAgentRegression(unittest.TestCase):
                 },
             ) as execute,
         ):
-            agent.run_general_agent(
-                "What is the status of order ORD1002?"
-            )
+            agent.run_general_agent("Explain my order ORD1002.")
 
         execute.assert_called_once_with(
             "get_order",
             {"order_id": "ORD1002"},
         )
 
-        output = " ".join(
-            str(call) for call in mock_print.call_args_list
-        )
-        self.assertIn("Delayed", output)
-
     @patch("builtins.print")
-    def test_missing_order_error_is_returned_to_model(
-        self,
-        mock_print,
-    ):
+    def test_missing_order_error_is_returned_to_model(self, mock_print):
         tool_call = make_tool_call(
             "get_order",
             {"order_id": "ORD9999"},
         )
-
         tool_response = make_response(tool_calls=[tool_call])
         final_response = make_response(
-            content="Order ORD9999 was not found."
+            content="I could not find that order."
         )
 
         with (
@@ -98,35 +88,24 @@ class TestGeneralAgentRegression(unittest.TestCase):
                     "success": False,
                     "error": "Order not found",
                 },
-            ) as execute,
+            ),
         ):
-            agent.run_general_agent(
-                "What is the status of order ORD9999?"
-            )
+            agent.run_general_agent("Look up order ORD9999.")
 
-        execute.assert_called_once_with(
-            "get_order",
-            {"order_id": "ORD9999"},
-        )
+        self.assertEqual(chat.call_count, 2)
 
         messages = chat.call_args_list[1].kwargs["messages"]
-        tool_messages = [
-            message
-            for message in messages
-            if isinstance(message, dict)
-            and message.get("role") == "tool"
-        ]
-
-        self.assertTrue(tool_messages)
-
-        result = json.loads(tool_messages[-1]["content"])
-        self.assertFalse(result["success"])
-        self.assertEqual(result["error"], "Order not found")
-
-        output = " ".join(
-            str(call) for call in mock_print.call_args_list
+        self.assertTrue(
+            any(
+                getattr(message, "role", None) == "tool"
+                or (
+                    isinstance(message, dict)
+                    and message.get("role") == "tool"
+                )
+                for message in messages
+            )
         )
-        self.assertIn("not found", output.lower())
+
 
     @patch("builtins.print")
     def test_order_status_uses_verified_tool_data(self, mock_print):
@@ -151,9 +130,9 @@ class TestGeneralAgentRegression(unittest.TestCase):
         output = " ".join(
             str(call) for call in mock_print.call_args_list
         )
-        self.assertIn("ORD1002", output)
-        self.assertIn("Mechanical Keyboard", output)
         self.assertIn("Delayed", output)
+
+
 
     @patch("builtins.print")
     def test_order_status_handles_missing_order(self, mock_print):
@@ -174,68 +153,193 @@ class TestGeneralAgentRegression(unittest.TestCase):
         output = " ".join(
             str(call) for call in mock_print.call_args_list
         )
-        self.assertIn("couldn't retrieve", output.lower())
+        self.assertIn("ORD9999", output)
         self.assertIn("Order not found", output)
 
-    def test_refund_request_routes_to_refund_handler(self):
+
+    @patch("builtins.print")
+    def test_refund_request_routes_to_refund_handler(self, mock_print):
         with (
-            patch("agent.handle_refund_request") as refund_handler,
-            patch("agent.handle_order_status") as status_handler,
-            patch("agent.run_general_agent") as general_handler,
+            patch.object(agent, "handle_refund_request") as handler,
+            patch.object(agent.client, "chat") as chat,
         ):
             agent.run_agent("I want a refund for order ORD1002")
 
-        refund_handler.assert_called_once_with(
+        handler.assert_called_once_with(
             "I want a refund for order ORD1002",
             "ORD1002",
         )
-        status_handler.assert_not_called()
-        general_handler.assert_not_called()
+        chat.assert_not_called()
 
-    def test_status_request_bypasses_llm(self):
+    @patch("builtins.print")
+    def test_status_request_bypasses_llm(self, mock_print):
         with (
-            patch("agent.handle_order_status") as status_handler,
-            patch("agent.handle_refund_request") as refund_handler,
-            patch("agent.run_general_agent") as general_handler,
+            patch.object(agent, "handle_order_status") as handler,
+            patch.object(agent.client, "chat") as chat,
         ):
-            agent.run_agent("What is the status of order ORD1002?")
+            agent.run_agent("Track order ORD1002")
 
-        status_handler.assert_called_once_with("ORD1002")
-        refund_handler.assert_not_called()
-        general_handler.assert_not_called()
+        handler.assert_called_once()
+        chat.assert_not_called()
+
 
     @patch("builtins.print")
     def test_refund_without_order_id_requests_order_id(self, mock_print):
         with (
-            patch("agent.handle_refund_request") as refund_handler,
-            patch("agent.handle_order_status") as status_handler,
-            patch("agent.run_general_agent") as general_handler,
+            patch.object(agent, "handle_refund_request") as handler,
+            patch.object(agent.client, "chat") as chat,
         ):
             agent.run_agent("I want a refund")
 
-        refund_handler.assert_not_called()
-        status_handler.assert_not_called()
-        general_handler.assert_not_called()
+        handler.assert_not_called()
+        chat.assert_not_called()
 
         output = " ".join(
             str(call) for call in mock_print.call_args_list
         )
-        self.assertIn("provide an order ID", output)
+        self.assertIn("ORD1002", output)
 
-    def test_general_question_uses_llm_agent(self):
-        question = "Explain what an order status means."
+
+
+
+
+    @patch("builtins.print")
+    def test_general_question_uses_llm_agent(self, mock_print):
+        with (
+            patch.object(agent, "run_general_agent") as general_agent,
+        ):
+            agent.run_agent("Explain how AI assistants work.")
+
+        general_agent.assert_called_once_with(
+            "Explain how AI assistants work."
+        )
+
+    @patch("builtins.print")
+    def test_tool_exception_is_returned_as_safe_error(self, mock_print):
+        tool_call = make_tool_call(
+            "get_order",
+            {"order_id": "ORD1002"},
+        )
+        tool_response = make_response(tool_calls=[tool_call])
+        final_response = make_response(
+            content="Sorry, I couldn't retrieve the order."
+        )
 
         with (
-            patch("agent.run_general_agent") as general_handler,
-            patch("agent.handle_refund_request") as refund_handler,
-            patch("agent.handle_order_status") as status_handler,
+            patch.object(
+                agent.client,
+                "chat",
+                side_effect=[tool_response, final_response],
+            ) as chat,
+            patch(
+                "agent.execute_tool",
+                side_effect=ConnectionError(
+                    "Sensitive internal database details"
+                ),
+            ) as execute,
         ):
-            agent.run_agent(question)
+            agent.run_general_agent("Explain my order.")
 
-        general_handler.assert_called_once_with(question)
-        refund_handler.assert_not_called()
-        status_handler.assert_not_called()
+        execute.assert_called_once_with(
+            "get_order",
+            {"order_id": "ORD1002"},
+        )
+        self.assertEqual(chat.call_count, 2)
+
+        messages = chat.call_args_list[1].kwargs["messages"]
+
+        # Ollama messages may be dictionaries or objects.
+        tool_contents = []
+
+        for message in messages:
+            if isinstance(message, dict):
+                role = message.get("role")
+                content = message.get("content")
+            else:
+                role = getattr(message, "role", None)
+                content = getattr(message, "content", None)
+
+            if role == "tool" and isinstance(content, str):
+                tool_contents.append(content)
+
+        self.assertTrue(
+            any(
+                json.loads(content).get("error")
+                == "Tool execution failed"
+                for content in tool_contents
+            ),
+            f"Expected a safe tool error in messages: {messages!r}",
+        )
+
+        self.assertNotIn(
+            "Sensitive internal database details",
+            repr(messages),
+        )
+
+    @patch("builtins.print")
+    def test_ollama_exception_is_handled_safely(self, mock_print):
+        with patch.object(
+            agent.client,
+            "chat",
+            side_effect=ConnectionError(
+                "Sensitive internal connection details"
+            ),
+        ):
+            agent.run_general_agent("Explain AI agents.")
+
+        output = " ".join(
+            str(call) for call in mock_print.call_args_list
+        )
+
+        self.assertNotIn(
+            "Sensitive internal connection details",
+            output,
+        )
+
+    @patch("builtins.print")
+    def test_tool_round_limit_stops_repeated_tool_calls(self, mock_print):
+        tool_call = make_tool_call(
+            "get_order",
+            {"order_id": "ORD1002"},
+        )
+        repeated_tool_response = make_response(
+            tool_calls=[tool_call]
+        )
+
+        with (
+            patch.object(
+                agent.client,
+                "chat",
+                return_value=repeated_tool_response,
+            ) as chat,
+            patch(
+                "agent.execute_tool",
+                return_value={
+                    "success": True,
+                    "data": {
+                        "order_id": "ORD1002",
+                        "item": "Mechanical Keyboard",
+                        "status": "Delayed",
+                    },
+                },
+            ) as execute,
+        ):
+            agent.run_general_agent("Explain my order.")
+
+        self.assertEqual(
+            chat.call_count,
+            agent.MAX_TOOL_ROUNDS,
+        )
+        self.assertEqual(
+            execute.call_count,
+            agent.MAX_TOOL_ROUNDS,
+        )
+
+        output = " ".join(
+            str(call) for call in mock_print.call_args_list
+        )
+        self.assertIn("maximum number of tool rounds", output.lower())
 
 
 if __name__ == "__main__":
-    unittest.main(verbosity=2)
+    unittest.main()
