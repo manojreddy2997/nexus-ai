@@ -211,20 +211,26 @@ def run_general_agent(user_input: str):
     """
 
     messages = [
-        {
+                 {
             "role": "system",
-                        "content": (
+            "content": (
                 "You are Nexus AI, a careful customer-support assistant. "
                 "Use approved tools when you need order information. "
-                "Treat tool results as the only source of facts about "
-                "orders. Never invent or assume an item's production "
-                "status, shipping details, estimated delivery date, "
-                "tracking activity, or customer contact. "
-                "If a tool returns an error, explain that error clearly. "
-                "If the tool provides only an order status, report only "
-                "that status and the item or order ID when available. "
-                "Do not describe a delayed order as being in production "
-                "unless a tool explicitly confirms it. "
+                "Treat successful tool results as the only source of "
+                "facts about orders. Never invent order details, "
+                "shipping information, or delivery dates. "
+                "For requests involving multiple orders, look up each "
+                "requested order with get_order and compare only the "
+                "facts returned by those lookups. "
+                "Use check_refund_policy only when the user explicitly "
+                "asks about refund policy, refund eligibility, or "
+                "refund guidance. Its order_status argument must be "
+                "the actual status string returned by get_order, "
+                "never a comparison, explanation, or guessed value. "
+                "Do not call the refund-policy tool just to compare "
+                "orders or report their statuses. "
+                "If a tool returns an error, explain it clearly. "
+                "If order information is unavailable, say so. "
                 "Never claim a refund was approved or processed. "
                 "Refund guidance is sample guidance, not an official "
                 "retailer policy. Keep answers concise and factual."
@@ -322,7 +328,18 @@ def run_agent(user_input: str):
         print("Agent: Please enter a message.")
         return
 
-    order_id = extract_order_id(user_input)
+    order_ids = re.findall(
+        r"\bORD[\s-]*\d+\b",
+        user_input,
+        re.IGNORECASE,
+    )
+
+    order_ids = [
+        re.sub(r"[\s-]+", "", order_id.upper())
+        for order_id in order_ids
+    ]
+
+    order_id = order_ids[0] if order_ids else None
     lower_input = user_input.lower()
 
     # Refund requests take priority over ordinary status requests.
@@ -337,15 +354,16 @@ def run_agent(user_input: str):
         handle_refund_request(user_input, order_id)
         return
 
-    # Handle simple order-status questions deterministically.
+    # Handle simple status questions for exactly one order.
     status_keywords = ("status", "where is", "track")
-    if order_id is not None and any(
+
+    if len(order_ids) == 1 and any(
         keyword in lower_input for keyword in status_keywords
     ):
         handle_order_status(order_id)
         return
 
-    # Keep the existing LLM tool-calling path for other requests.
+    # Multi-order and other requests use the LLM tool-calling path.
     run_general_agent(user_input)
 
 
