@@ -147,45 +147,89 @@ def test_whitespace_order_id_is_rejected():
     }
 
 
-def test_empty_order_status_is_rejected():
+def test_empty_order_id_for_refund_policy_is_rejected():
     result = execute_tool(
         "check_refund_policy",
-        {"order_status": ""},
+        {"order_id": ""},
     )
 
     assert result == {
         "success": False,
-        "error": "Order status cannot be empty",
+        "error": "Order ID cannot be empty",
     }
 
 
-def test_non_text_order_status_is_rejected():
+def test_non_text_order_id_for_refund_policy_is_rejected():
     result = execute_tool(
         "check_refund_policy",
-        {"order_status": None},
+        {"order_id": None},
     )
 
     assert result == {
         "success": False,
-        "error": "Order status must be text",
+        "error": "Order ID must be text",
     }
-def test_fabricated_order_status_is_rejected():
+
+
+def test_unknown_order_for_refund_policy_is_rejected():
     result = execute_tool(
         "check_refund_policy",
-        {"order_status": "Delayed vs Delivered"},
+        {"order_id": "ORD9999"},
     )
 
     assert result == {
         "success": False,
-        "error": "Order status does not match a known order status",
+        "error": "Order not found",
     }
 
 
-def test_known_order_status_is_accepted():
-    result = execute_tool(
+def test_refund_policy_uses_status_for_requested_order():
+    delayed = execute_tool(
         "check_refund_policy",
-        {"order_status": "Delayed"},
+        {"order_id": "ORD1002"},
     )
 
-    assert result["success"] is True
-    assert result["automatic_refund"] is False
+    delivered = execute_tool(
+        "check_refund_policy",
+        {"order_id": "ORD1003"},
+    )
+
+    assert delayed["success"] is True
+    assert delayed["policy"] == (
+        "Delayed orders require a support review."
+    )
+
+    assert delivered["success"] is True
+    assert delivered["policy"] == (
+        "Delivered orders may qualify for a refund review."
+    )
+
+    assert delayed["automatic_refund"] is False
+    assert delivered["automatic_refund"] is False
+
+
+def test_caller_cannot_override_order_status():
+    result = execute_tool(
+        "check_refund_policy",
+        {
+            "order_id": "ORD1002",
+            "order_status": "Delivered",
+        },
+    )
+
+    assert result == {
+        "success": False,
+        "error": "Invalid tool arguments",
+    }
+
+
+def test_old_status_argument_is_rejected():
+    result = execute_tool(
+        "check_refund_policy",
+        {"order_status": "Delivered"},
+    )
+
+    assert result == {
+        "success": False,
+        "error": "Invalid tool arguments",
+    }

@@ -1,23 +1,19 @@
 
-from order_tools import ORDERS, get_order
+"""Validated tool execution for Nexus AI."""
+
+from order_tools import get_order
 
 
 def check_refund_policy(order_status: str) -> dict:
     """Return sample refund guidance without approving a refund."""
 
-    if not isinstance(order_status, str):
+    if not isinstance(order_status, str) or not order_status.strip():
         return {
             "success": False,
-            "error": "Order status must be text",
+            "error": "A valid order status is required",
         }
 
-    status = order_status.strip().lower()
-
-    if not status:
-        return {
-            "success": False,
-            "error": "Order status cannot be empty",
-        }
+    status = order_status.strip().casefold()
 
     if status == "delivered":
         return {
@@ -45,12 +41,12 @@ def check_refund_policy(order_status: str) -> dict:
 
 ALLOWED_TOOLS = {
     "get_order": {"order_id"},
-    "check_refund_policy": {"order_status"},
+    "check_refund_policy": {"order_id"},
 }
 
 
 def execute_tool(tool_name: str, arguments: dict) -> dict:
-    """Execute approved tools after validating names and argument values."""
+    """Execute approved tools using validated, trusted order records."""
 
     if not isinstance(tool_name, str) or tool_name not in ALLOWED_TOOLS:
         return {
@@ -64,61 +60,48 @@ def execute_tool(tool_name: str, arguments: dict) -> dict:
             "error": "Invalid tool arguments",
         }
 
-    expected_arguments = ALLOWED_TOOLS[tool_name]
-
-    if set(arguments.keys()) != expected_arguments:
+    if set(arguments.keys()) != ALLOWED_TOOLS[tool_name]:
         return {
             "success": False,
             "error": "Invalid tool arguments",
         }
 
-    if tool_name == "get_order":
-        order_id = arguments["order_id"]
+    order_id = arguments["order_id"]
 
-        if not isinstance(order_id, str):
-            return {
-                "success": False,
-                "error": "Order ID must be text",
-            }
-
-        if not order_id.strip():
-            return {
-                "success": False,
-                "error": "Order ID cannot be empty",
-            }
-
-        return get_order(order_id)
-
-    if tool_name == "check_refund_policy":
-        order_status = arguments["order_status"]
-
-        if not isinstance(order_status, str):
-            return {
-                "success": False,
-                "error": "Order status must be text",
-            }
-
-        if not order_status.strip():
-            return {
-                "success": False,
-                "error": "Order status cannot be empty",
-            }
-
-        known_statuses = {
-            order["status"].strip().casefold()
-            for order in ORDERS.values()
-            if isinstance(order.get("status"), str)
+    if not isinstance(order_id, str):
+        return {
+            "success": False,
+            "error": "Order ID must be text",
         }
 
-        if order_status.strip().casefold() not in known_statuses:
-            return {
-                "success": False,
-                "error": "Order status does not match a known order status",
-            }
+    if not order_id.strip():
+        return {
+            "success": False,
+            "error": "Order ID cannot be empty",
+        }
 
-        return check_refund_policy(order_status)
+    order_result = get_order(order_id)
 
-    return {
-        "success": False,
-        "error": "Tool not allowed",
-    }
+    if not order_result.get("success"):
+        return order_result
+
+    if tool_name == "get_order":
+        return order_result
+
+    order_data = order_result.get("data")
+
+    if not isinstance(order_data, dict):
+        return {
+            "success": False,
+            "error": "Invalid order record",
+        }
+
+    actual_status = order_data.get("status")
+
+    if not isinstance(actual_status, str) or not actual_status.strip():
+        return {
+            "success": False,
+            "error": "Order record has no valid status",
+        }
+
+    return check_refund_policy(actual_status)

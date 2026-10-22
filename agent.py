@@ -1,4 +1,4 @@
-
+﻿
 import json
 import re
 
@@ -47,21 +47,23 @@ tools = [
         "function": {
             "name": "check_refund_policy",
             "description": (
-                "Check sample refund guidance using the "
-                "actual order status returned by get_order."
+                "Check sample refund guidance for an order. "
+                "Python retrieves the actual status from the "
+                "trusted order record."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "order_status": {
+                    "order_id": {
                         "type": "string",
-                        "description": "The actual order status",
+                        "description": "The customer's order ID",
                     }
                 },
-                "required": ["order_status"],
+                "required": ["order_id"],
             },
         },
     },
+
 ]
 
 
@@ -119,13 +121,12 @@ def handle_refund_request(user_input: str, order_id: str):
         return
 
     order_data = order_result["data"]
-    actual_status = order_data["status"]
 
     print("\n--- Tool round 2: Refund policy ---")
 
     policy_result = execute_tool(
         "check_refund_policy",
-        {"order_status": actual_status},
+        {"order_id": order_data["order_id"]},
     )
 
     print("Requested tool: check_refund_policy")
@@ -214,19 +215,17 @@ def run_general_agent(user_input: str):
                  {
             "role": "system",
             "content": (
-                "You are Nexus AI, a careful customer-support assistant. "
-                "Use approved tools when you need order information. "
-                "Treat successful tool results as the only source of "
-                "facts about orders. Never invent order details, "
-                "shipping information, or delivery dates. "
+                
+                "You are Nexus AI, a helpful local AI assistant. "
+                "Use tools when order information is needed. "
                 "For requests involving multiple orders, look up each "
                 "requested order with get_order and compare only the "
                 "facts returned by those lookups. "
                 "Use check_refund_policy only when the user explicitly "
                 "asks about refund policy, refund eligibility, or "
-                "refund guidance. Its order_status argument must be "
-                "the actual status string returned by get_order, "
-                "never a comparison, explanation, or guessed value. "
+                "refund guidance. Pass the requested order ID to this "
+                "tool. Python retrieves the actual status from the "
+                "trusted order record. Never supply a guessed status. "
                 "Do not call the refund-policy tool just to compare "
                 "orders or report their statuses. "
                 "If a tool returns an error, explain it clearly. "
@@ -234,6 +233,7 @@ def run_general_agent(user_input: str):
                 "Never claim a refund was approved or processed. "
                 "Refund guidance is sample guidance, not an official "
                 "retailer policy. Keep answers concise and factual."
+
             ),
         },
         {
