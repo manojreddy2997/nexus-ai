@@ -123,3 +123,49 @@ def test_list_tool_name_is_rejected():
         "success": False,
         "error": "Tool not allowed",
     }
+def test_empty_order_id_is_rejected():
+    result = execute_tool(
+        "get_order",
+        {"order_id": ""},
+    )
+
+    assert result == {
+        "success": False,
+        "error": "Order ID cannot be empty",
+    }
+
+
+def test_whitespace_order_id_is_rejected():
+    result = execute_tool(
+        "get_order",
+        {"order_id": "   "},
+    )
+
+    assert result == {
+        "success": False,
+        "error": "Order ID cannot be empty",
+    }
+
+
+def test_empty_order_status_is_rejected():
+    result = execute_tool(
+        "check_refund_policy",
+        {"order_status": ""},
+    )
+
+    assert result == {
+        "success": False,
+        "error": "Order status cannot be empty",
+    }
+
+
+def test_non_text_order_status_is_rejected():
+    result = execute_tool(
+        "check_refund_policy",
+        {"order_status": None},
+    )
+
+    assert result == {
+        "success": False,
+        "error": "Order status must be text",
+    }
