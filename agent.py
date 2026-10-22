@@ -172,6 +172,36 @@ def handle_refund_request(user_input: str, order_id: str):
 # 5. GENERAL TOOL-CALLING AGENT
 # --------------------------------------------------
 
+def handle_order_status(order_id: str):
+    """Return an order-status response from verified tool data."""
+
+    print("\n--- Order status lookup ---")
+
+    result = execute_tool(
+        "get_order",
+        {"order_id": order_id},
+    )
+
+    print("Requested tool: get_order")
+    print("Tool result:", json.dumps(result, indent=2))
+
+    if not result.get("success"):
+        error = result.get("error", "Order lookup failed.")
+        print(f"\nAgent: I couldn't retrieve order {order_id}.")
+        print(f"Reason: {error}")
+        return
+
+    order = result["data"]
+    verified_id = order.get("order_id", order_id)
+    item = order.get("item", "Unknown item")
+    status = order.get("status", "Unknown")
+
+    print("\n--- Final response ---")
+    print(
+        f"\nAgent: Order {verified_id} "
+        f"({item}) is currently {status}."
+    )
+
 def run_general_agent(user_input: str):
     """
     Let Ollama request approved tools.
@@ -281,6 +311,8 @@ def run_general_agent(user_input: str):
 # 6. MAIN AGENT ENTRY POINT
 # --------------------------------------------------
 
+
+
 def run_agent(user_input: str):
     """Route user input to the appropriate workflow."""
 
@@ -290,10 +322,11 @@ def run_agent(user_input: str):
         print("Agent: Please enter a message.")
         return
 
-    # Refund requests use a controlled, predictable sequence.
-    if "refund" in user_input.lower():
-        order_id = extract_order_id(user_input)
+    order_id = extract_order_id(user_input)
+    lower_input = user_input.lower()
 
+    # Refund requests take priority over ordinary status requests.
+    if "refund" in lower_input:
         if order_id is None:
             print(
                 "Agent: Please provide an order ID, "
@@ -304,7 +337,16 @@ def run_agent(user_input: str):
         handle_refund_request(user_input, order_id)
         return
 
-        run_general_agent(user_input)
+    # Handle simple order-status questions deterministically.
+    status_keywords = ("status", "where is", "track")
+    if order_id is not None and any(
+        keyword in lower_input for keyword in status_keywords
+    ):
+        handle_order_status(order_id)
+        return
+
+    # Keep the existing LLM tool-calling path for other requests.
+    run_general_agent(user_input)
 
 
 # --------------------------------------------------
