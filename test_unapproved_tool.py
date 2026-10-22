@@ -169,3 +169,23 @@ def test_non_text_order_status_is_rejected():
         "success": False,
         "error": "Order status must be text",
     }
+def test_fabricated_order_status_is_rejected():
+    result = execute_tool(
+        "check_refund_policy",
+        {"order_status": "Delayed vs Delivered"},
+    )
+
+    assert result == {
+        "success": False,
+        "error": "Order status does not match a known order status",
+    }
+
+
+def test_known_order_status_is_accepted():
+    result = execute_tool(
+        "check_refund_policy",
+        {"order_status": "Delayed"},
+    )
+
+    assert result["success"] is True
+    assert result["automatic_refund"] is False

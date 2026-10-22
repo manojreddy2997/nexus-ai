@@ -1,5 +1,5 @@
 
-from order_tools import get_order
+from order_tools import ORDERS, get_order
 
 
 def check_refund_policy(order_status: str) -> dict:
@@ -102,6 +102,18 @@ def execute_tool(tool_name: str, arguments: dict) -> dict:
             return {
                 "success": False,
                 "error": "Order status cannot be empty",
+            }
+
+        known_statuses = {
+            order["status"].strip().casefold()
+            for order in ORDERS.values()
+            if isinstance(order.get("status"), str)
+        }
+
+        if order_status.strip().casefold() not in known_statuses:
+            return {
+                "success": False,
+                "error": "Order status does not match a known order status",
             }
 
         return check_refund_policy(order_status)
